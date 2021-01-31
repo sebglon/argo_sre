@@ -1,0 +1,70 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: terraform
+  namespace: argo
+spec:
+  templates:
+    - name: plan
+      inputs:
+        artifacts:
+        - name: terraform
+          path: /home/terraform
+          git:
+            repo: https://github.com/sebglon/argo_terraform_app.git
+            depth: 1
+      script:
+        imagePullPolicy: "Always"
+        image: descrepes/terraform:0.12.9-demo
+        command: ["sh"]
+        source: |
+          cp /home/terraform/*.tf /home/myuser/
+          /bin/terraform init -input=false /home/myuser
+          /bin/terraform plan -parallelism=2 -input=false -no-color -out=/home/myuser/tfclientsplan /home/myuser >> /tmp/terraform-change.log
+      outputs:
+        artifacts:
+          - name: terraform-plan
+            path: /home/myuser/
+            archive:
+              none: {}
+          - name: terraform-log
+            path: /tmp/terraform-change.log
+            archive:
+              none: {}
+
+    - name: apply
+      inputs:
+        artifacts:
+        - name: terraform-plan
+          path: /home/terraform
+      serviceAccountName: argo
+      script:
+        imagePullPolicy: "Always"
+        image: descrepes/terraform:0.12.9-demo
+        command: ["sh"]
+        source: |
+          /bin/terraform apply -input=false -parallelism=2 -no-color /home/terraform/tfclientsplan
+
+    - name: approve
+      suspend: {}
+
+    - name: update
+      dag:
+        tasks:
+          - name: plan
+            template: plan
+            outputs:
+              artifacts:
+                - name: terraform-plan
+                  path: /home/myuser/
+          - name: approve
+            dependencies: [plan]
+            template: approve
+          - name: apply
+            template: apply
+            dependencies: [plan, approve]
+            arguments:
+              artifacts:
+              - name: terraform-plan
+                from: "{{tasks.plan.outputs.artifacts.terraform-plan}}"
